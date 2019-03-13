@@ -1618,6 +1618,8 @@ seaf_repo_manager_del_file (SeafRepoManager *mgr,
 {
     SeafRepo *repo = NULL;
     SeafCommit *head_commit = NULL;
+    SeafDir *dir = NULL;
+    GList *p = NULL;
     char *canon_path = NULL;
     char **file_names;
     char buf[SEAF_PATH_MAX];
@@ -1634,6 +1636,16 @@ seaf_repo_manager_del_file (SeafRepoManager *mgr,
     if (!canon_path)
         canon_path = get_canonical_path (parent_dir);
 
+    dir = seaf_fs_manager_get_seafdir_by_path (seaf->fs_mgr,
+                                               repo->store_id, repo->version,
+                                               head_commit->root_id, canon_path, NULL);
+    if (!dir) {
+        seaf_warning ("parent_dir %s doesn't exist in repo %s.\n",
+                      canon_path, repo->store_id);
+        ret = -1;
+        goto out;
+    }
+
     if (strchr(file_name, '\t')) {
         file_names = g_strsplit (file_name, "\t", -1);
         file_num = g_strv_length (file_names);
@@ -1643,8 +1655,18 @@ seaf_repo_manager_del_file (SeafRepoManager *mgr,
                 empty_num++;
                 continue;
             }
-            if (!check_file_exists(repo->store_id, repo->version,
-                                   head_commit->root_id, canon_path, file_names[i], &mode)) {
+
+            gboolean found = FALSE;
+            for (p = dir->entries; p; p = p->next) {
+                SeafDirent *d = p->data;
+                if (strcmp (d->name, file_names[i]) == 0) {
+                    found = TRUE;
+                    dir->entries = g_list_remove_link(dir->entries, p);
+                    g_list_free_full (p, (GDestroyNotify)seaf_dirent_free);
+                    break;
+                }
+            }
+            if (!found) {
                 char *tmp_path;
                 if (strcmp(canon_path, "") == 0)
                     tmp_path = "/";
@@ -1655,6 +1677,7 @@ seaf_repo_manager_del_file (SeafRepoManager *mgr,
                 empty_num++;
                 continue;
             }
+
             desc_file = file_names[i];
         }
         file_num -= empty_num;
@@ -1692,8 +1715,6 @@ seaf_repo_manager_del_file (SeafRepoManager *mgr,
         goto out;
     }
 
-    seaf_repo_manager_cleanup_virtual_repos (mgr, repo_id);
-
     seaf_repo_manager_merge_virtual_repo (mgr, repo_id, NULL);
 
 out:
@@ -1703,6 +1724,8 @@ out:
         seaf_commit_unref(head_commit);
     if (file_num)
         g_strfreev (file_names);
+    if (dir)
+        seaf_dir_free (dir);
     g_free (root_id);
     g_free (canon_path);
 
@@ -2855,7 +2878,6 @@ seaf_repo_manager_move_file (SeafRepoManager *mgr,
             goto out;
         }
 
-        seaf_repo_manager_cleanup_virtual_repos (mgr, src_repo_id);
         seaf_repo_manager_merge_virtual_repo (mgr, src_repo_id, NULL);
 
         update_repo_size (dst_repo_id);
@@ -3086,7 +3108,6 @@ seaf_repo_manager_move_multiple_files (SeafRepoManager *mgr,
             ret = -1;
             goto out;
         }
-        seaf_repo_manager_cleanup_virtual_repos (mgr, src_repo_id);
         seaf_repo_manager_merge_virtual_repo (mgr, src_repo_id, NULL);
 
         update_repo_size (dst_repo_id);
@@ -3704,7 +3725,6 @@ seaf_repo_manager_rename_file (SeafRepoManager *mgr,
         goto out;
     }
 
-    seaf_repo_manager_cleanup_virtual_repos (mgr, repo_id);
     seaf_repo_manager_merge_virtual_repo (mgr, repo_id, NULL);
 
 out:
